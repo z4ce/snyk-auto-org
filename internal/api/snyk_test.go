@@ -76,6 +76,77 @@ var _ = Describe("SnykClient", func() {
 			})
 		})
 
+		Context("when the API returns paginated results", func() {
+			BeforeEach(func() {
+				// First page with next link
+				mux.HandleFunc("/orgs", func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
+					Expect(r.URL.Query().Get("version")).To(Equal(api.SnykAPIRestVersion))
+
+					// Check if this is the second page request
+					if r.URL.Query().Get("starting_after") == "org-id-2" {
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(`{
+							"data": [
+								{
+									"id": "org-id-3",
+									"attributes": {
+										"name": "Organization 3",
+										"slug": "org-slug-3"
+									}
+								},
+								{
+									"id": "org-id-4",
+									"attributes": {
+										"name": "Organization 4",
+										"slug": "org-slug-4"
+									}
+								}
+							],
+							"links": {
+								"prev": "/orgs?version=` + api.SnykAPIRestVersion + `&ending_before=org-id-3"
+							}
+						}`))
+						return
+					}
+
+					// First page
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{
+						"data": [
+							{
+								"id": "org-id-1",
+								"attributes": {
+									"name": "Organization 1",
+									"slug": "org-slug-1"
+								}
+							},
+							{
+								"id": "org-id-2",
+								"attributes": {
+									"name": "Organization 2",
+									"slug": "org-slug-2"
+								}
+							}
+						],
+						"links": {
+							"next": "/orgs?version=` + api.SnykAPIRestVersion + `&starting_after=org-id-2"
+						}
+					}`))
+				})
+			})
+
+			It("returns all organizations from all pages", func() {
+				orgs, err := client.GetOrganizations()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(orgs).To(HaveLen(4))
+				Expect(orgs[0].ID).To(Equal("org-id-1"))
+				Expect(orgs[1].ID).To(Equal("org-id-2"))
+				Expect(orgs[2].ID).To(Equal("org-id-3"))
+				Expect(orgs[3].ID).To(Equal("org-id-4"))
+			})
+		})
+
 		Context("when the API returns an error", func() {
 			BeforeEach(func() {
 				mux.HandleFunc("/orgs", func(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +163,63 @@ var _ = Describe("SnykClient", func() {
 	})
 
 	Describe("GetTargetsWithURL", func() {
+		Context("when the API returns paginated results", func() {
+			BeforeEach(func() {
+				// First page with next link
+				mux.HandleFunc("/orgs/"+orgID+"/targets", func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
+					Expect(r.URL.Query().Get("version")).To(Equal(api.SnykAPIRestVersion))
+
+					// Check if this is the second page request
+					if r.URL.Query().Get("starting_after") == "target-id-1" {
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(`{
+							"data": [
+								{
+									"id": "target-id-2",
+									"attributes": {
+										"displayName": "test/repo2",
+										"url": "https://github.com/test/repo2"
+									}
+								}
+							],
+							"links": {
+								"prev": "/orgs/` + orgID + `/targets?version=` + api.SnykAPIRestVersion + `&ending_before=target-id-2"
+							}
+						}`))
+						return
+					}
+
+					// First page
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{
+						"data": [
+							{
+								"id": "target-id-1",
+								"attributes": {
+									"displayName": "test/repo",
+									"url": "` + gitURL + `"
+								}
+							}
+						],
+						"links": {
+							"next": "/orgs/` + orgID + `/targets?version=` + api.SnykAPIRestVersion + `&starting_after=target-id-1"
+						}
+					}`))
+				})
+			})
+
+			It("returns all targets from all pages", func() {
+				targets, err := client.GetTargetsWithURL(orgID, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(targets).To(HaveLen(2))
+				Expect(targets[0].ID).To(Equal("target-id-1"))
+				Expect(targets[0].Attributes.DisplayName).To(Equal("test/repo"))
+				Expect(targets[1].ID).To(Equal("target-id-2"))
+				Expect(targets[1].Attributes.DisplayName).To(Equal("test/repo2"))
+			})
+		})
+
 		Context("when the API returns a successful response", func() {
 			BeforeEach(func() {
 				mux.HandleFunc("/orgs/"+orgID+"/targets", func(w http.ResponseWriter, r *http.Request) {

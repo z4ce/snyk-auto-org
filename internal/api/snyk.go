@@ -14,6 +14,7 @@ const (
 	SnykAPIRestBaseURL = "https://api.snyk.io/rest"
 	SnykConfigPath     = ".config/configstore/snyk.json"
 	SnykAPIRestVersion = "2024-10-15"
+	DefaultPageLimit   = 100 // Default number of items per page
 )
 
 // Organization represents a Snyk organization from the REST API
@@ -29,7 +30,11 @@ type Organization struct {
 
 // OrgsResponse represents the response from the Snyk REST API for organizations
 type OrgsResponse struct {
-	Data []Organization `json:"data"`
+	Data  []Organization `json:"data"`
+	Links struct {
+		Next string `json:"next"`
+		Prev string `json:"prev"`
+	} `json:"links"`
 }
 
 // Target represents a Snyk target from the REST API
@@ -43,7 +48,11 @@ type Target struct {
 
 // TargetsResponse represents the response from the Snyk REST API for targets
 type TargetsResponse struct {
-	Data []Target `json:"data"`
+	Data  []Target `json:"data"`
+	Links struct {
+		Next string `json:"next"`
+		Prev string `json:"prev"`
+	} `json:"links"`
 }
 
 // OrgTarget represents a combination of an organization and a target
@@ -59,6 +68,7 @@ type SnykClient struct {
 	APIToken    string
 	RestBaseURL string
 	HTTPClient  *http.Client
+	PageLimit   int // Number of items per page for paginated requests
 }
 
 // NewSnykClient creates a new Snyk API client
@@ -74,6 +84,7 @@ func NewSnykClient() (*SnykClient, error) {
 		HTTPClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		PageLimit: DefaultPageLimit,
 	}, nil
 }
 
@@ -81,48 +92,85 @@ func NewSnykClient() (*SnykClient, error) {
 func (c *SnykClient) GetOrganizations() ([]Organization, error) {
 	params := url.Values{}
 	params.Add("version", SnykAPIRestVersion)
+	params.Add("limit", fmt.Sprintf("%d", c.PageLimit))
 
 	reqURL := fmt.Sprintf("%s/orgs?%s", c.RestBaseURL, params.Encode())
-	req, err := http.NewRequest("GET", reqURL, nil)
+
+	// Call the helper function to fetch all paginated results
+	orgs, err := c.getAllOrganizationPages(reqURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.api+json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.APIToken))
+	return orgs, nil
+}
 
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
+// getAllOrganizationPages retrieves all pages of organizations from the Snyk REST API
+func (c *SnykClient) getAllOrganizationPages(initialURL string) ([]Organization, error) {
+	var allOrganizations []Organization
+	nextURL := initialURL
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
-	}
+	for nextURL != "" {
+		// Make request to the current URL
+		req, err := http.NewRequest("GET", nextURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
+		req.Header.Set("Content-Type", "application/vnd.api+json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.APIToken))
 
-	var orgsResp OrgsResponse
-	if err := json.Unmarshal(body, &orgsResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
+		resp, err := c.HTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute request: %w", err)
+		}
 
-	// Map API response to Organization objects
-	organizations := make([]Organization, len(orgsResp.Data))
-	for i, org := range orgsResp.Data {
-		organizations[i] = Organization{
-			ID:   org.ID,
-			Name: org.Attributes.Name,
-			Slug: org.Attributes.Slug,
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+
+		var orgsResp OrgsResponse
+		if err := json.Unmarshal(body, &orgsResp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+
+		// Map API response to Organization objects and append to result
+		for _, org := range orgsResp.Data {
+			allOrganizations = append(allOrganizations, Organization{
+				ID:   org.ID,
+				Name: org.Attributes.Name,
+				Slug: org.Attributes.Slug,
+			})
+		}
+
+		// Check if there's a next page
+		if orgsResp.Links.Next != "" {
+			// If the next URL is a relative path, make it absolute
+			if !isAbsoluteURL(orgsResp.Links.Next) {
+				nextURL = c.RestBaseURL + orgsResp.Links.Next
+			} else {
+				nextURL = orgsResp.Links.Next
+			}
+		} else {
+			// No more pages
+			nextURL = ""
 		}
 	}
 
-	return organizations, nil
+	return allOrganizations, nil
+}
+
+// isAbsoluteURL checks if the given URL is absolute (starts with http:// or https://)
+func isAbsoluteURL(urlStr string) bool {
+	return len(urlStr) > 8 && (urlStr[:7] == "http://" || urlStr[:8] == "https://")
 }
 
 // getSnykAPIToken retrieves the Snyk API token from the user's config
@@ -155,39 +203,82 @@ func getSnykAPIToken() (string, error) {
 func (c *SnykClient) GetTargetsWithURL(orgID string, urlFilter string) ([]Target, error) {
 	params := url.Values{}
 	params.Add("version", SnykAPIRestVersion)
-	params.Add("url", urlFilter)
+	params.Add("limit", fmt.Sprintf("%d", c.PageLimit))
+	if urlFilter != "" {
+		params.Add("url", urlFilter)
+	}
 
 	reqURL := fmt.Sprintf("%s/orgs/%s/targets?%s", c.RestBaseURL, orgID, params.Encode())
-	req, err := http.NewRequest("GET", reqURL, nil)
+
+	// Call the helper function to fetch all paginated results
+	targets, err := c.getAllTargetPages(reqURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.api+json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.APIToken))
+	return targets, nil
+}
 
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+// getAllTargetPages retrieves all pages of targets from the Snyk REST API
+func (c *SnykClient) getAllTargetPages(initialURL string) ([]Target, error) {
+	var allTargets []Target
+	nextURL := initialURL
+
+	for nextURL != "" {
+		// Make request to the current URL
+		req, err := http.NewRequest("GET", nextURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/vnd.api+json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.APIToken))
+
+		resp, err := c.HTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute request: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+
+		var targetsResp TargetsResponse
+		if err := json.Unmarshal(body, &targetsResp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+
+		// Append targets from this page to our result
+		allTargets = append(allTargets, targetsResp.Data...)
+
+		// Check if there's a next page
+		if targetsResp.Links.Next != "" {
+			// If the next URL is a relative path, make it absolute
+			if !isAbsoluteURL(targetsResp.Links.Next) {
+				nextURL = c.RestBaseURL + targetsResp.Links.Next
+			} else {
+				nextURL = targetsResp.Links.Next
+			}
+		} else {
+			// No more pages
+			nextURL = ""
+		}
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(bodyBytes))
-	}
+	return allTargets, nil
+}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var targetsResp TargetsResponse
-	if err := json.Unmarshal(body, &targetsResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return targetsResp.Data, nil
+// GetTargets retrieves all targets for an organization
+func (c *SnykClient) GetTargets(orgID string) ([]Target, error) {
+	return c.GetTargetsWithURL(orgID, "")
 }
 
 // FindOrgWithTargetURL finds an organization with a target matching the given URL

@@ -163,28 +163,30 @@ func run(cmd *cobra.Command, args []string) error {
 		// If we have a Git URL (whether provided or detected), use it to find organization
 		if gitURL != "" {
 			if cfg.Verbose {
-				fmt.Printf("Searching for organization with target URL: %s\n", gitURL)
+				fmt.Printf("Looking for Snyk organization with target URL: %s\n", gitURL)
 			}
 
-			// Find organization by target URL
-			orgTarget, err := client.FindOrgWithTargetURL(gitURL)
-			if err != nil {
+			orgID, err := findOrgByGitURL(gitURL, db, cfg, client)
+			if err == nil {
+				// Found organization by URL, use it
 				if cfg.Verbose {
-					fmt.Printf("Could not find organization for Git URL: %v\n", err)
-					fmt.Println("Running Snyk command without organization")
+					// Get organization name
+					organizations, err := getOrganizations(db, cfg)
+					if err == nil {
+						for _, org := range organizations {
+							if org.ID == orgID {
+								fmt.Printf("Using Snyk organization %s (%s) for Git URL: %s\n", org.Name, org.ID, gitURL)
+								break
+							}
+						}
+					}
 				}
 
-				// Just execute the command without setting an organization
-				executor := cmdpkg.NewSnykExecutor("")
+				// Execute with the found organization
+				executor := cmdpkg.NewSnykExecutor(orgID)
 				return executor.Execute(args)
-			} else {
-				if cfg.Verbose {
-					fmt.Printf("Found organization %s for target %s\n", orgTarget.OrgName, orgTarget.TargetName)
-				}
-
-				// Create the executor and run the command with the found organization
-				executor := cmdpkg.NewSnykExecutor(orgTarget.OrgID)
-				return executor.Execute(args)
+			} else if cfg.Verbose {
+				fmt.Printf("Could not find organization for Git URL: %v\n", err)
 			}
 		}
 	}
@@ -260,4 +262,77 @@ func getOrganizations(db *cache.SQLiteCache, cfg *config.Config) ([]api.Organiza
 	}
 
 	return orgs, nil
+}
+
+// findOrgByGitURL attempts to find an organization by Git URL
+func findOrgByGitURL(gitURL string, db *cache.SQLiteCache, cfg *config.Config, client *api.SnykClient) (string, error) {
+	// Check if we have cached targets with this URL
+	cachedOrgTargets, err := db.GetTargetsByURL(gitURL)
+	if err == nil && len(cachedOrgTargets) > 0 {
+		// Found a match in cache
+		if cfg.Verbose {
+			fmt.Printf("Found cached target for URL %s in organization %s\n", gitURL, cachedOrgTargets[0].OrgName)
+		}
+		return cachedOrgTargets[0].OrgID, nil
+	}
+
+	// Not found in cache or error occurred, try to find from API
+	orgTarget, err := client.FindOrgWithTargetURL(gitURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to find organization with target URL %s: %w", gitURL, err)
+	}
+
+	// Cache the found target
+	target := api.Target{
+		ID: "dynamically-found", // We don't have the actual target ID here, but that's ok for our purposes
+		Attributes: struct {
+			DisplayName string `json:"displayName"`
+			URL         string `json:"url"`
+		}{
+			DisplayName: orgTarget.TargetName,
+			URL:         orgTarget.TargetURL,
+		},
+	}
+
+	if err := db.StoreTargets(orgTarget.OrgID, []api.Target{target}); err != nil {
+		// Just log the error but continue, as this is non-critical
+		if cfg.Verbose {
+			fmt.Printf("Warning: failed to cache target: %v\n", err)
+		}
+	}
+
+	return orgTarget.OrgID, nil
+}
+
+// getTargets retrieves targets for an organization, using cache if available
+func getTargets(orgID string, db *cache.SQLiteCache, cfg *config.Config, client *api.SnykClient) ([]api.Target, error) {
+	// Check if the targets cache for this org is expired
+	expired, err := db.IsTargetsCacheExpired(orgID, cfg.CacheTTL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check targets cache expiration: %w", err)
+	}
+
+	// If the cache is valid, use it
+	if !expired {
+		targets, err := db.GetTargetsByOrgID(orgID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get targets from cache: %w", err)
+		}
+		if len(targets) > 0 {
+			return targets, nil
+		}
+	}
+
+	// Cache is expired or empty, fetch targets from the API
+	targets, err := client.GetTargets(orgID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get targets from API: %w", err)
+	}
+
+	// Store the targets in the cache
+	if err := db.StoreTargets(orgID, targets); err != nil {
+		return nil, fmt.Errorf("failed to store targets in cache: %w", err)
+	}
+
+	return targets, nil
 }

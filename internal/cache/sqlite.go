@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS metadata (
 	value TEXT NOT NULL
 );`
 
+	createTargetsTableSQL = `
+CREATE TABLE IF NOT EXISTS targets (
+	id TEXT PRIMARY KEY,
+	org_id TEXT NOT NULL,
+	display_name TEXT NOT NULL,
+	url TEXT NOT NULL,
+	FOREIGN KEY (org_id) REFERENCES organizations(id)
+);`
+
 	insertOrgSQL = `
 INSERT OR REPLACE INTO organizations (id, name, slug)
 VALUES (?, ?, ?);`
@@ -31,6 +40,10 @@ VALUES (?, ?, ?);`
 	insertMetadataSQL = `
 INSERT OR REPLACE INTO metadata (key, value)
 VALUES (?, ?);`
+
+	insertTargetSQL = `
+INSERT OR REPLACE INTO targets (id, org_id, display_name, url)
+VALUES (?, ?, ?, ?);`
 
 	selectOrgsSQL = `
 SELECT id, name, slug
@@ -40,6 +53,21 @@ FROM organizations;`
 SELECT value
 FROM metadata
 WHERE key = ?;`
+
+	selectTargetsSQL = `
+SELECT id, org_id, display_name, url
+FROM targets;`
+
+	selectTargetsByOrgIDSQL = `
+SELECT id, org_id, display_name, url
+FROM targets
+WHERE org_id = ?;`
+
+	selectTargetsByURLSQL = `
+SELECT t.id, t.org_id, t.display_name, t.url, o.name as org_name
+FROM targets t
+JOIN organizations o ON t.org_id = o.id
+WHERE t.url = ?;`
 )
 
 // SQLiteCache implements caching of Snyk organizations using SQLite
@@ -75,6 +103,10 @@ func NewSQLiteCache() (*SQLiteCache, error) {
 
 	if _, err := db.Exec(createMetadataTableSQL); err != nil {
 		return nil, fmt.Errorf("failed to create metadata table: %w", err)
+	}
+
+	if _, err := db.Exec(createTargetsTableSQL); err != nil {
+		return nil, fmt.Errorf("failed to create targets table: %w", err)
 	}
 
 	return &SQLiteCache{
@@ -126,6 +158,117 @@ func (c *SQLiteCache) GetOrganizations() ([]api.Organization, error) {
 	return orgs, nil
 }
 
+// StoreTargets stores targets for an organization in the cache
+func (c *SQLiteCache) StoreTargets(orgID string, targets []api.Target) error {
+	// Begin a transaction
+	tx, err := c.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert each target
+	for _, target := range targets {
+		if _, err := tx.Exec(insertTargetSQL, target.ID, orgID, target.Attributes.DisplayName, target.Attributes.URL); err != nil {
+			return fmt.Errorf("failed to insert target: %w", err)
+		}
+	}
+
+	// Store the targets update timestamp for this org
+	if _, err := tx.Exec(insertMetadataSQL, fmt.Sprintf("targets_update_%s", orgID), time.Now().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("failed to update targets timestamp: %w", err)
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// GetTargets retrieves all targets from the cache
+func (c *SQLiteCache) GetTargets() ([]api.Target, error) {
+	rows, err := c.db.Query(selectTargetsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select targets: %w", err)
+	}
+	defer rows.Close()
+
+	var targets []api.Target
+	for rows.Next() {
+		var id, orgID, displayName, url string
+		if err := rows.Scan(&id, &orgID, &displayName, &url); err != nil {
+			return nil, fmt.Errorf("failed to scan target row: %w", err)
+		}
+
+		target := api.Target{
+			ID: id,
+		}
+		target.Attributes.DisplayName = displayName
+		target.Attributes.URL = url
+
+		targets = append(targets, target)
+	}
+
+	return targets, nil
+}
+
+// GetTargetsByOrgID retrieves targets for a specific organization from the cache
+func (c *SQLiteCache) GetTargetsByOrgID(orgID string) ([]api.Target, error) {
+	rows, err := c.db.Query(selectTargetsByOrgIDSQL, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select targets for org %s: %w", orgID, err)
+	}
+	defer rows.Close()
+
+	var targets []api.Target
+	for rows.Next() {
+		var id, orgID, displayName, url string
+		if err := rows.Scan(&id, &orgID, &displayName, &url); err != nil {
+			return nil, fmt.Errorf("failed to scan target row: %w", err)
+		}
+
+		target := api.Target{
+			ID: id,
+		}
+		target.Attributes.DisplayName = displayName
+		target.Attributes.URL = url
+
+		targets = append(targets, target)
+	}
+
+	return targets, nil
+}
+
+// GetTargetsByURL retrieves targets with a specific URL from the cache
+func (c *SQLiteCache) GetTargetsByURL(url string) ([]api.OrgTarget, error) {
+	rows, err := c.db.Query(selectTargetsByURLSQL, url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select targets for URL %s: %w", url, err)
+	}
+	defer rows.Close()
+
+	var orgTargets []api.OrgTarget
+	for rows.Next() {
+		var id, orgID, displayName, url, orgName string
+		if err := rows.Scan(&id, &orgID, &displayName, &url, &orgName); err != nil {
+			return nil, fmt.Errorf("failed to scan target row: %w", err)
+		}
+
+		orgTarget := api.OrgTarget{
+			OrgID:      orgID,
+			OrgName:    orgName,
+			TargetURL:  url,
+			TargetName: displayName,
+		}
+
+		orgTargets = append(orgTargets, orgTarget)
+	}
+
+	return orgTargets, nil
+}
+
 // IsExpired checks if the cache has expired
 func (c *SQLiteCache) IsExpired(ttl time.Duration) (bool, error) {
 	var lastUpdateStr string
@@ -143,9 +286,31 @@ func (c *SQLiteCache) IsExpired(ttl time.Duration) (bool, error) {
 	return time.Since(lastUpdate) > ttl, nil
 }
 
+// IsTargetsCacheExpired checks if the targets cache for an organization has expired
+func (c *SQLiteCache) IsTargetsCacheExpired(orgID string, ttl time.Duration) (bool, error) {
+	var lastUpdateStr string
+	err := c.db.Get(&lastUpdateStr, selectMetadataSQL, fmt.Sprintf("targets_update_%s", orgID))
+	if err != nil {
+		// If the key doesn't exist, the cache is expired
+		return true, nil
+	}
+
+	lastUpdate, err := time.Parse(time.RFC3339, lastUpdateStr)
+	if err != nil {
+		return true, fmt.Errorf("failed to parse targets last update timestamp: %w", err)
+	}
+
+	return time.Since(lastUpdate) > ttl, nil
+}
+
 // ResetCache clears all cached data
 func (c *SQLiteCache) ResetCache() error {
-	_, err := c.db.Exec("DELETE FROM organizations")
+	_, err := c.db.Exec("DELETE FROM targets")
+	if err != nil {
+		return fmt.Errorf("failed to delete targets: %w", err)
+	}
+
+	_, err = c.db.Exec("DELETE FROM organizations")
 	if err != nil {
 		return fmt.Errorf("failed to delete organizations: %w", err)
 	}

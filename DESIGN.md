@@ -75,8 +75,15 @@ This tool will create a wrapper around the Snyk CLI that automatically sets the 
   CREATE TABLE organizations (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    slug TEXT NOT NULL,
-    url TEXT NOT NULL
+    slug TEXT NOT NULL
+  );
+  
+  CREATE TABLE targets (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
   );
   
   CREATE TABLE metadata (
@@ -86,12 +93,16 @@ This tool will create a wrapper around the Snyk CLI that automatically sets the 
   ```
 - Store:
   - Organization IDs and names
-  - Timestamp of last update
+  - Target IDs, names, and URLs
+  - Timestamp of last update for organizations and targets
   - User's authentication context (hashed to detect changes)
 - Implement cache invalidation:
   - Based on configurable TTL (time-to-live)
   - When authentication changes
   - Manually via the `--reset-cache` flag
+- Target-to-organization mapping:
+  - Cache results of target URL lookups
+  - Enable fast organization selection based on Git remote URL
 
 ## Current Implementation Details
 

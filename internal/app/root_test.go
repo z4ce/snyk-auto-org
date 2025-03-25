@@ -75,13 +75,13 @@ var _ = Describe("Root", func() {
 			buildCmd := exec.Command("go", "build", "-o", buildPath, "../../cmd/snyk-auto-org/main.go")
 			session, err := gexec.Start(buildCmd, GinkgoWriter, GinkgoWriter)
 			Expect(err).NotTo(HaveOccurred())
-			Eventually(session).Should(gexec.Exit(0))
+			Eventually(session, 5).Should(gexec.Exit(0))
 
 			// Test that the binary runs
 			helpCmd := exec.Command(buildPath, "--help")
 			helpSession, err := gexec.Start(helpCmd, GinkgoWriter, GinkgoWriter)
 			Expect(err).NotTo(HaveOccurred())
-			Eventually(helpSession).Should(gexec.Exit(0))
+			Eventually(helpSession, 5).Should(gexec.Exit(0))
 			output := string(helpSession.Out.Contents())
 			Expect(output).To(ContainSubstring("Snyk Auto Org is a wrapper"))
 		})
@@ -92,6 +92,18 @@ var _ = Describe("Root", func() {
 			// This would be a more complete integration test with mocks
 			// In a real test suite, we would use dependency injection to mock components
 			Skip("Integration testing with mocks requires refactoring for better testability")
+		})
+
+		It("should handle Git URL target caching", func() {
+			Skip("Testing target caching requires refactoring for better testability - this is a placeholder for a future test")
+			// In a real implementation, we would:
+			// 1. Mock the SQLite cache
+			// 2. Mock the Snyk API client
+			// 3. Set up test data for organizations and targets
+			// 4. Call findOrgByGitURL with a known URL
+			// 5. Verify it uses cached data if available
+			// 6. Verify it falls back to API call if cache is empty
+			// 7. Verify it updates the cache after a successful API call
 		})
 	})
 })
