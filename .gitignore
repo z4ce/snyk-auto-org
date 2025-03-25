@@ -1,0 +1,49 @@
+# Go binary and build files
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test files
+*.test
+*.out
+*.prof
+
+# Go coverage files
+coverage.txt
+*.cover
+
+# Local dependency files
+vendor/
+
+# Snyk auto-org specific
+~/.config/snyk-auto-org/
+.snyk-auto-org/
+
+# Cache and database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Debug files
+debug
+
+# Configuration files with potential secrets
+.env
+*.config.json
+
+# Test artifacts
+**/testdata/tmp/ 
