@@ -47,3 +47,4 @@ debug
 
 # Test artifacts
 **/testdata/tmp/ 
+snyk-auto-org

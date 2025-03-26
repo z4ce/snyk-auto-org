@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -88,6 +90,20 @@ func NewSnykClient() (*SnykClient, error) {
 	}, nil
 }
 
+// redactToken returns a partially redacted version of the auth token
+func redactToken(token string) string {
+	if len(token) <= 8 {
+		return "****"
+	}
+	return token[:4] + "..." + token[len(token)-4:]
+}
+
+// logRequest logs information about the API request being made
+func (c *SnykClient) logRequest(method, url string) {
+	redactedToken := redactToken(c.APIToken)
+	log.Printf("Snyk API Request: %s %s [Auth: Bearer %s]", method, url, redactedToken)
+}
+
 // GetOrganizations retrieves the list of organizations from the Snyk REST API
 func (c *SnykClient) GetOrganizations() ([]Organization, error) {
 	params := url.Values{}
@@ -111,6 +127,9 @@ func (c *SnykClient) getAllOrganizationPages(initialURL string) ([]Organization,
 	nextURL := initialURL
 
 	for nextURL != "" {
+		// Log the request
+		c.logRequest("GET", nextURL)
+
 		// Make request to the current URL
 		req, err := http.NewRequest("GET", nextURL, nil)
 		if err != nil {
@@ -225,6 +244,9 @@ func (c *SnykClient) getAllTargetPages(initialURL string) ([]Target, error) {
 	nextURL := initialURL
 
 	for nextURL != "" {
+		// Log the request
+		c.logRequest("GET", nextURL)
+
 		// Make request to the current URL
 		req, err := http.NewRequest("GET", nextURL, nil)
 		if err != nil {
@@ -288,21 +310,40 @@ func (c *SnykClient) FindOrgWithTargetURL(targetURL string) (*OrgTarget, error) 
 		return nil, fmt.Errorf("failed to get organizations: %w", err)
 	}
 
+	// Create both HTTP and HTTPS variants of the URL to query
+	httpVariant := targetURL
+	httpsVariant := targetURL
+
+	// Make sure we have both variants of the URL
+	if strings.HasPrefix(targetURL, "https://") {
+		httpVariant = "http://" + strings.TrimPrefix(targetURL, "https://")
+	} else if strings.HasPrefix(targetURL, "http://") {
+		httpsVariant = "https://" + strings.TrimPrefix(targetURL, "http://")
+	} else {
+		// If no protocol provided, default to both http:// and https:// prefixes
+		httpVariant = "http://" + targetURL
+		httpsVariant = "https://" + targetURL
+	}
+
 	for _, org := range organizations {
-		targets, err := c.GetTargetsWithURL(org.ID, targetURL)
+		// Get all targets for this organization
+		targets, err := c.GetTargets(org.ID)
 		if err != nil {
 			// Continue to next org on error
 			continue
 		}
 
-		if len(targets) > 0 {
-			// Found a target matching the URL
-			return &OrgTarget{
-				OrgID:      org.ID,
-				OrgName:    org.Name,
-				TargetURL:  targetURL,
-				TargetName: targets[0].Attributes.DisplayName,
-			}, nil
+		// Search for matching URL in the targets
+		for _, target := range targets {
+			if target.Attributes.URL == httpVariant || target.Attributes.URL == httpsVariant {
+				// Found a target matching one of the URL variants
+				return &OrgTarget{
+					OrgID:      org.ID,
+					OrgName:    org.Name,
+					TargetURL:  target.Attributes.URL,
+					TargetName: target.Attributes.DisplayName,
+				}, nil
+			}
 		}
 	}
 

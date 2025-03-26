@@ -283,7 +283,6 @@ var _ = Describe("SnykClient", func() {
 				// Mock the GetTargetsWithURL response for the first org (no targets)
 				mux.HandleFunc("/orgs/org-id-1/targets", func(w http.ResponseWriter, r *http.Request) {
 					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
-					Expect(r.URL.Query().Get("url")).To(Equal(gitURL))
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(`{"data": []}`))
 				})
@@ -291,7 +290,6 @@ var _ = Describe("SnykClient", func() {
 				// Mock the GetTargetsWithURL response for the second org (has target)
 				mux.HandleFunc("/orgs/org-id-2/targets", func(w http.ResponseWriter, r *http.Request) {
 					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
-					Expect(r.URL.Query().Get("url")).To(Equal(gitURL))
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(`{
 						"data": [

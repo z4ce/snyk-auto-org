@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -266,7 +267,7 @@ func getOrganizations(db *cache.SQLiteCache, cfg *config.Config) ([]api.Organiza
 
 // findOrgByGitURL attempts to find an organization by Git URL
 func findOrgByGitURL(gitURL string, db *cache.SQLiteCache, cfg *config.Config, client *api.SnykClient) (string, error) {
-	// Check if we have cached targets with this URL
+	// Check if we have cached targets with this URL (cache already handles both HTTP/HTTPS variants)
 	cachedOrgTargets, err := db.GetTargetsByURL(gitURL)
 	if err == nil && len(cachedOrgTargets) > 0 {
 		// Found a match in cache
@@ -276,32 +277,52 @@ func findOrgByGitURL(gitURL string, db *cache.SQLiteCache, cfg *config.Config, c
 		return cachedOrgTargets[0].OrgID, nil
 	}
 
-	// Not found in cache or error occurred, try to find from API
-	orgTarget, err := client.FindOrgWithTargetURL(gitURL)
+	// Get all organizations
+	organizations, err := getOrganizations(db, cfg)
 	if err != nil {
-		return "", fmt.Errorf("failed to find organization with target URL %s: %w", gitURL, err)
+		return "", fmt.Errorf("failed to get organizations: %w", err)
 	}
 
-	// Cache the found target
-	target := api.Target{
-		ID: "dynamically-found", // We don't have the actual target ID here, but that's ok for our purposes
-		Attributes: struct {
-			DisplayName string `json:"displayName"`
-			URL         string `json:"url"`
-		}{
-			DisplayName: orgTarget.TargetName,
-			URL:         orgTarget.TargetURL,
-		},
+	// Create both HTTP and HTTPS variants of the URL
+	httpVariant := gitURL
+	httpsVariant := gitURL
+
+	// Make sure we have both variants of the URL
+	if strings.HasPrefix(gitURL, "https://") {
+		httpVariant = "http://" + strings.TrimPrefix(gitURL, "https://")
+	} else if strings.HasPrefix(gitURL, "http://") {
+		httpsVariant = "https://" + strings.TrimPrefix(gitURL, "http://")
+	} else {
+		// If no protocol provided, default to both http:// and https:// prefixes
+		httpVariant = "http://" + gitURL
+		httpsVariant = "https://" + gitURL
 	}
 
-	if err := db.StoreTargets(orgTarget.OrgID, []api.Target{target}); err != nil {
-		// Just log the error but continue, as this is non-critical
-		if cfg.Verbose {
-			fmt.Printf("Warning: failed to cache target: %v\n", err)
+	// Check each organization for a matching target
+	for _, org := range organizations {
+		// Use our getTargets function which handles cache and API calls
+		targets, err := getTargets(org.ID, db, cfg, client)
+		if err != nil {
+			// Skip this org on error but log if verbose
+			if cfg.Verbose {
+				fmt.Printf("Warning: failed to get targets for organization %s: %v\n", org.Name, err)
+			}
+			continue
+		}
+
+		// Check each target for a URL match
+		for _, target := range targets {
+			if target.Attributes.URL == httpVariant || target.Attributes.URL == httpsVariant {
+				if cfg.Verbose {
+					fmt.Printf("Found target for URL %s in organization %s\n", gitURL, org.Name)
+				}
+				return org.ID, nil
+			}
 		}
 	}
 
-	return orgTarget.OrgID, nil
+	// If we get here, we haven't found a matching target in any organization
+	return "", fmt.Errorf("no organization found with a target matching URL: %s", gitURL)
 }
 
 // getTargets retrieves targets for an organization, using cache if available
@@ -319,11 +340,18 @@ func getTargets(orgID string, db *cache.SQLiteCache, cfg *config.Config, client 
 			return nil, fmt.Errorf("failed to get targets from cache: %w", err)
 		}
 		if len(targets) > 0 {
+			if cfg.Verbose {
+				fmt.Printf("Using cached targets for organization %s\n", orgID)
+			}
 			return targets, nil
 		}
 	}
 
-	// Cache is expired or empty, fetch targets from the API
+	// Cache is expired or empty, fetch all targets from the API
+	if cfg.Verbose {
+		fmt.Printf("Fetching all targets for organization %s\n", orgID)
+	}
+
 	targets, err := client.GetTargets(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get targets from API: %w", err)

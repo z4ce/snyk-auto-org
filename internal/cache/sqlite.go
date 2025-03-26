@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -67,7 +68,7 @@ WHERE org_id = ?;`
 SELECT t.id, t.org_id, t.display_name, t.url, o.name as org_name
 FROM targets t
 JOIN organizations o ON t.org_id = o.id
-WHERE t.url = ?;`
+WHERE LOWER(t.url) = LOWER(?) OR LOWER(t.url) = LOWER(?);`
 )
 
 // SQLiteCache implements caching of Snyk organizations using SQLite
@@ -160,6 +161,10 @@ func (c *SQLiteCache) GetOrganizations() ([]api.Organization, error) {
 
 // StoreTargets stores targets for an organization in the cache
 func (c *SQLiteCache) StoreTargets(orgID string, targets []api.Target) error {
+	if len(targets) == 0 {
+		return nil // Nothing to store
+	}
+
 	// Begin a transaction
 	tx, err := c.db.Beginx()
 	if err != nil {
@@ -242,8 +247,24 @@ func (c *SQLiteCache) GetTargetsByOrgID(orgID string) ([]api.Target, error) {
 }
 
 // GetTargetsByURL retrieves targets with a specific URL from the cache
+// This function now checks for both HTTP and HTTPS variants of the URL
 func (c *SQLiteCache) GetTargetsByURL(url string) ([]api.OrgTarget, error) {
-	rows, err := c.db.Query(selectTargetsByURLSQL, url)
+	// Create both HTTP and HTTPS variants of the URL
+	httpVariant := url
+	httpsVariant := url
+
+	// Make sure we have both variants of the URL
+	if strings.HasPrefix(url, "https://") {
+		httpVariant = "http://" + strings.TrimPrefix(url, "https://")
+	} else if strings.HasPrefix(url, "http://") {
+		httpsVariant = "https://" + strings.TrimPrefix(url, "http://")
+	} else {
+		// If no protocol provided, default to both http:// and https:// prefixes
+		httpVariant = "http://" + url
+		httpsVariant = "https://" + url
+	}
+
+	rows, err := c.db.Query(selectTargetsByURLSQL, httpVariant, httpsVariant)
 	if err != nil {
 		return nil, fmt.Errorf("failed to select targets for URL %s: %w", url, err)
 	}
