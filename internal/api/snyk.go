@@ -14,10 +14,117 @@ import (
 
 const (
 	SnykAPIRestBaseURL = "https://api.snyk.io/rest"
+	SnykOAuthBaseURL   = "https://api.snyk.io/oauth2"
 	SnykConfigPath     = ".config/configstore/snyk.json"
 	SnykAPIRestVersion = "2024-10-15"
 	DefaultPageLimit   = 100 // Default number of items per page
 )
+
+// TokenResponse represents the response from the OAuth2 token endpoint
+type TokenResponse struct {
+	AccessToken      string `json:"access_token"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
+	TokenType        string `json:"token_type"`
+	Scope            string `json:"scope"`
+	BotID            string `json:"bot_id"`
+}
+
+// TokenStorage represents the structure of the token storage in Snyk config
+type TokenStorage struct {
+	AccessToken  string    `json:"access_token"`
+	TokenType    string    `json:"token_type"`
+	RefreshToken string    `json:"refresh_token"`
+	Expiry       time.Time `json:"expiry"`
+}
+
+// TokenProvider defines the interface for token operations
+type TokenProvider interface {
+	GetToken() (*TokenStorage, error)
+	SaveToken(*TokenStorage) error
+}
+
+// CLITokenProvider implements TokenProvider using Snyk CLI config
+type CLITokenProvider struct{}
+
+func (p *CLITokenProvider) GetToken() (*TokenStorage, error) {
+	cmd := exec.Command("snyk", "config", "get", "INTERNAL_OAUTH_TOKEN_STORAGE")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute snyk config command: %w", err)
+	}
+
+	var tokenStorage TokenStorage
+	if err := json.Unmarshal(output, &tokenStorage); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal token storage: %w", err)
+	}
+
+	return &tokenStorage, nil
+}
+
+func (p *CLITokenProvider) SaveToken(token *TokenStorage) error {
+	tokenBytes, err := json.Marshal(token)
+	if err != nil {
+		return fmt.Errorf("failed to marshal token storage: %w", err)
+	}
+
+	cmd := exec.Command("snyk", "config", "set", "INTERNAL_OAUTH_TOKEN_STORAGE", string(tokenBytes))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to save token storage: %w", err)
+	}
+
+	return nil
+}
+
+// TokenRefresher defines the interface for token refresh operations
+type TokenRefresher interface {
+	RefreshToken(refreshToken string) (*TokenResponse, error)
+}
+
+// OAuth2TokenRefresher implements TokenRefresher using OAuth2 endpoint
+type OAuth2TokenRefresher struct {
+	client   *http.Client
+	oauthURL string
+}
+
+func NewOAuth2TokenRefresher() *OAuth2TokenRefresher {
+	return &OAuth2TokenRefresher{
+		client:   &http.Client{Timeout: 10 * time.Second},
+		oauthURL: SnykOAuthBaseURL,
+	}
+}
+
+func (r *OAuth2TokenRefresher) RefreshToken(refreshToken string) (*TokenResponse, error) {
+	data := url.Values{}
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequest("POST", r.oauthURL+"/token", strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create refresh token request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute refresh token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to refresh token: status %d, body: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to decode token response: %w", err)
+	}
+
+	return &tokenResp, nil
+}
 
 // Organization represents a Snyk organization from the REST API
 type Organization struct {
@@ -67,26 +174,31 @@ type OrgTarget struct {
 
 // SnykClient handles communication with the Snyk API
 type SnykClient struct {
-	APIToken    string
-	RestBaseURL string
-	HTTPClient  *http.Client
-	PageLimit   int // Number of items per page for paginated requests
+	APIToken       string
+	RestBaseURL    string
+	HTTPClient     *http.Client
+	PageLimit      int // Number of items per page for paginated requests
+	tokenProvider  TokenProvider
+	tokenRefresher TokenRefresher
 }
 
 // NewSnykClient creates a new Snyk API client
 func NewSnykClient() (*SnykClient, error) {
-	token, err := getSnykAPIToken()
+	provider := &CLITokenProvider{}
+	refresher := NewOAuth2TokenRefresher()
+
+	token, err := GetSnykAPIToken(provider, refresher)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SnykClient{
-		APIToken:    token,
-		RestBaseURL: SnykAPIRestBaseURL,
-		HTTPClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
-		PageLimit: DefaultPageLimit,
+		APIToken:       token,
+		RestBaseURL:    SnykAPIRestBaseURL,
+		HTTPClient:     &http.Client{Timeout: 10 * time.Second},
+		PageLimit:      DefaultPageLimit,
+		tokenProvider:  provider,
+		tokenRefresher: refresher,
 	}, nil
 }
 
@@ -192,23 +304,37 @@ func isAbsoluteURL(urlStr string) bool {
 	return len(urlStr) > 8 && (urlStr[:7] == "http://" || urlStr[:8] == "https://")
 }
 
-// getSnykAPIToken retrieves the Snyk API token from the user's config
-func getSnykAPIToken() (string, error) {
-	cmd := exec.Command("snyk", "config", "get", "INTERNAL_OAUTH_TOKEN_STORAGE")
-	output, err := cmd.Output()
+// GetSnykAPIToken retrieves the Snyk API token using the provided TokenProvider
+func GetSnykAPIToken(provider TokenProvider, refresher TokenRefresher) (string, error) {
+	tokenStorage, err := provider.GetToken()
 	if err != nil {
-		return "", fmt.Errorf("failed to execute snyk config command: %w", err)
+		return "", err
 	}
 
-	var tokenStorage struct {
-		AccessToken  string `json:"access_token"`
-		TokenType    string `json:"token_type"`
-		RefreshToken string `json:"refresh_token"`
-		Expiry       string `json:"expiry"`
-	}
+	// Check if the access token is expired or about to expire (within 5 minutes)
+	if tokenStorage.Expiry.Before(time.Now().Add(5 * time.Minute)) {
+		if tokenStorage.RefreshToken == "" {
+			return "", fmt.Errorf("access token is expired and no refresh token available")
+		}
 
-	if err := json.Unmarshal(output, &tokenStorage); err != nil {
-		return "", fmt.Errorf("failed to unmarshal token storage: %w", err)
+		// Try to refresh the token
+		tokenResp, err := refresher.RefreshToken(tokenStorage.RefreshToken)
+		if err != nil {
+			return "", fmt.Errorf("failed to refresh token: %w", err)
+		}
+
+		// Update token storage with new tokens
+		tokenStorage = &TokenStorage{
+			AccessToken:  tokenResp.AccessToken,
+			TokenType:    tokenResp.TokenType,
+			RefreshToken: tokenResp.RefreshToken,
+			Expiry:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
+		}
+
+		// Save the updated tokens
+		if err := provider.SaveToken(tokenStorage); err != nil {
+			return "", fmt.Errorf("failed to save updated token storage: %w", err)
+		}
 	}
 
 	if tokenStorage.AccessToken == "" {

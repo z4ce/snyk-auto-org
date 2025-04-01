@@ -1,13 +1,41 @@
 package api_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/z4ce/snyk-auto-org/internal/api"
 )
+
+// MockTokenProvider implements TokenProvider for testing
+type MockTokenProvider struct {
+	token *api.TokenStorage
+	err   error
+	saved *api.TokenStorage
+}
+
+func (m *MockTokenProvider) GetToken() (*api.TokenStorage, error) {
+	return m.token, m.err
+}
+
+func (m *MockTokenProvider) SaveToken(token *api.TokenStorage) error {
+	m.saved = token
+	return nil
+}
+
+// MockTokenRefresher implements TokenRefresher for testing
+type MockTokenRefresher struct {
+	response *api.TokenResponse
+	err      error
+}
+
+func (m *MockTokenRefresher) RefreshToken(refreshToken string) (*api.TokenResponse, error) {
+	return m.response, m.err
+}
 
 var _ = Describe("SnykClient", func() {
 	var (
@@ -33,6 +61,116 @@ var _ = Describe("SnykClient", func() {
 
 	AfterEach(func() {
 		server.Close()
+	})
+
+	Describe("Token Refresh", func() {
+		var (
+			mockProvider  *MockTokenProvider
+			mockRefresher *MockTokenRefresher
+		)
+
+		BeforeEach(func() {
+			mockProvider = &MockTokenProvider{}
+			mockRefresher = &MockTokenRefresher{}
+		})
+
+		Context("when the token needs to be refreshed", func() {
+			BeforeEach(func() {
+				// Set up expired token storage
+				mockProvider.token = &api.TokenStorage{
+					AccessToken:  "expired-token",
+					TokenType:    "bearer",
+					RefreshToken: "test-refresh-token",
+					Expiry:       time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				}
+
+				// Set up mock refresher response
+				mockRefresher.response = &api.TokenResponse{
+					AccessToken:      "new-test-token",
+					ExpiresIn:        3600,
+					RefreshToken:     "new-refresh-token",
+					RefreshExpiresIn: 15552000,
+					TokenType:        "bearer",
+					Scope:            "org.read org.project.read",
+					BotID:            "test-bot-id",
+				}
+			})
+
+			It("should refresh the token when expired", func() {
+				token, err := api.GetSnykAPIToken(mockProvider, mockRefresher)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(token).To(Equal("new-test-token"))
+
+				// Verify the new token was saved
+				Expect(mockProvider.saved).NotTo(BeNil())
+				Expect(mockProvider.saved.AccessToken).To(Equal("new-test-token"))
+				Expect(mockProvider.saved.RefreshToken).To(Equal("new-refresh-token"))
+				Expect(mockProvider.saved.TokenType).To(Equal("bearer"))
+				// Verify expiry was set correctly (within 1 second tolerance)
+				expectedExpiry := time.Now().Add(3600 * time.Second)
+				Expect(mockProvider.saved.Expiry).To(BeTemporally("~", expectedExpiry, time.Second))
+			})
+		})
+
+		Context("when the token refresh fails", func() {
+			BeforeEach(func() {
+				// Set up expired token storage
+				mockProvider.token = &api.TokenStorage{
+					AccessToken:  "expired-token",
+					TokenType:    "bearer",
+					RefreshToken: "test-refresh-token",
+					Expiry:       time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				}
+
+				// Set up mock refresher to return error
+				mockRefresher.err = fmt.Errorf("failed to refresh token: invalid_grant")
+			})
+
+			It("should return an error", func() {
+				_, err := api.GetSnykAPIToken(mockProvider, mockRefresher)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("failed to refresh token"))
+			})
+		})
+
+		Context("when the token is valid and not near expiry", func() {
+			BeforeEach(func() {
+				// Set up valid token storage
+				mockProvider.token = &api.TokenStorage{
+					AccessToken:  "valid-token",
+					TokenType:    "bearer",
+					RefreshToken: "test-refresh-token",
+					Expiry:       time.Now().Add(1 * time.Hour), // Valid for 1 more hour
+				}
+			})
+
+			It("should return the existing token without refreshing", func() {
+				token, err := api.GetSnykAPIToken(mockProvider, mockRefresher)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(token).To(Equal("valid-token"))
+
+				// Verify no token was saved (no refresh occurred)
+				Expect(mockProvider.saved).To(BeNil())
+			})
+		})
+
+		Context("when the token is expired and no refresh token is available", func() {
+			BeforeEach(func() {
+				// Set up expired token storage with no refresh token
+				mockProvider.token = &api.TokenStorage{
+					AccessToken:  "expired-token",
+					TokenType:    "bearer",
+					RefreshToken: "",
+					Expiry:       time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				}
+			})
+
+			It("should return an error", func() {
+				_, err := api.GetSnykAPIToken(mockProvider, mockRefresher)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("no refresh token available"))
+			})
+		})
 	})
 
 	Describe("GetOrganizations", func() {
