@@ -6,6 +6,9 @@ import (
 	"os/exec"
 )
 
+// ExecCommand is a variable that can be overridden for testing
+var ExecCommand = exec.Command
+
 // SnykExecutor executes Snyk CLI commands
 type SnykExecutor struct {
 	// The organization ID to use for Snyk commands
@@ -26,7 +29,7 @@ func (e *SnykExecutor) Execute(args []string) error {
 	}
 
 	// Create the command to execute
-	cmd := exec.Command("snyk", args...)
+	cmd := ExecCommand("snyk", args...)
 
 	// Copy the current environment
 	env := os.Environ()

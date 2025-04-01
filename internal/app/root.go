@@ -26,12 +26,23 @@ from your Snyk account.`,
 			os.Exit(1)
 		}
 	},
+	// Don't validate unknown flags, so we can pass them to snyk
+	FParseErrWhitelist: cobra.FParseErrWhitelist{
+		UnknownFlags: true,
+	},
+	// Don't show help by default
+	SilenceUsage: true,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() error {
-	return rootCmd.Execute()
+	// Execute the root command which will handle our flags
+	err := rootCmd.Execute()
+
+	// If there's a custom error, it means the execute function used our flags
+	// correctly, so we return that error
+	return err
 }
 
 func init() {
@@ -46,6 +57,32 @@ func init() {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+	// Get all the original arguments, excluding the program name
+	allArgs := os.Args[1:]
+
+	// Find the snyk command arguments (everything after the first non-flag argument)
+	var snykArgs []string
+
+	// If cobra detected subcommands/args, find those in original args
+	if len(args) > 0 {
+		// Find the position of the first argument in allArgs
+		firstArgPos := -1
+		for i, arg := range allArgs {
+			if arg == args[0] {
+				firstArgPos = i
+				break
+			}
+		}
+
+		// If found, take everything from that position onwards
+		if firstArgPos != -1 {
+			snykArgs = allArgs[firstArgPos:]
+		} else {
+			// Fallback to args as provided by cobra
+			snykArgs = args
+		}
+	}
+
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -81,6 +118,32 @@ func run(cmd *cobra.Command, args []string) error {
 		if cfg.Verbose {
 			fmt.Println("Cache has been reset")
 		}
+		// If we're just resetting the cache, exit here
+		return nil
+	}
+
+	// Check if the user requested to list organizations
+	if listOrgs, _ := cmd.Flags().GetBool("list-orgs"); listOrgs {
+		organizations, err := getOrganizations(db, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to get organizations: %w", err)
+		}
+
+		fmt.Println("Available Snyk organizations:")
+		for _, org := range organizations {
+			fmt.Printf("- %s (%s)\n", org.Name, org.ID)
+		}
+		return nil
+	}
+
+	// If help was explicitly requested, show it
+	if cmd.Flags().Changed("help") {
+		return cmd.Help()
+	}
+
+	// If no arguments or flags were provided, show help
+	if len(args) == 0 && len(allArgs) == 0 {
+		return cmd.Help()
 	}
 
 	// If the user explicitly specified an organization, use that
@@ -110,21 +173,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 		// Use the specified organization
 		executor := cmdpkg.NewSnykExecutor(orgID)
-		return executor.Execute(args)
-	}
-
-	// Check if the user requested to list organizations
-	if listOrgs, _ := cmd.Flags().GetBool("list-orgs"); listOrgs {
-		organizations, err := getOrganizations(db, cfg)
-		if err != nil {
-			return fmt.Errorf("failed to get organizations: %w", err)
-		}
-
-		fmt.Println("Available Snyk organizations:")
-		for _, org := range organizations {
-			fmt.Printf("- %s (%s)\n", org.Name, org.ID)
-		}
-		return nil
+		return executor.Execute(snykArgs)
 	}
 
 	// Create Snyk client
@@ -152,7 +201,7 @@ func run(cmd *cobra.Command, args []string) error {
 					fmt.Println("Running Snyk command without organization")
 				}
 				executor := cmdpkg.NewSnykExecutor("")
-				return executor.Execute(args)
+				return executor.Execute(snykArgs)
 			} else {
 				gitURL = detectedURL
 				if cfg.Verbose {
@@ -185,7 +234,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 				// Execute with the found organization
 				executor := cmdpkg.NewSnykExecutor(orgID)
-				return executor.Execute(args)
+				return executor.Execute(snykArgs)
 			} else if cfg.Verbose {
 				fmt.Printf("Could not find organization for Git URL: %v\n", err)
 			}
@@ -209,14 +258,9 @@ func run(cmd *cobra.Command, args []string) error {
 					fmt.Printf("Using default organization from config: %s (%s)\n", org.Name, org.ID)
 				}
 				executor := cmdpkg.NewSnykExecutor(org.ID)
-				return executor.Execute(args)
+				return executor.Execute(snykArgs)
 			}
 		}
-	}
-
-	// If no arguments were provided, just show help
-	if len(args) == 0 {
-		return cmd.Help()
 	}
 
 	// Run the command without setting an organization
@@ -224,7 +268,7 @@ func run(cmd *cobra.Command, args []string) error {
 		fmt.Println("Running Snyk command without organization")
 	}
 	executor := cmdpkg.NewSnykExecutor("")
-	return executor.Execute(args)
+	return executor.Execute(snykArgs)
 }
 
 // getOrganizations retrieves organizations from the cache or the Snyk API
