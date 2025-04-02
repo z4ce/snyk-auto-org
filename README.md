@@ -1,14 +1,29 @@
 # Snyk Auto Org
 
-Snyk Auto Org is a command-line tool that wraps the [Snyk CLI](https://docs.snyk.io/snyk-cli) and automatically sets the `SNYK_CFG_ORG` environment variable based on available organizations from your Snyk account.
+**THIS IS A VERY EXPERIMENTAL PROOF OF CONCEPT. USE AT OWN RISK TALK TO ME FIRST**
+Snyk Auto Org is a command-line tool that wraps the [Snyk CLI](https://docs.snyk.io/snyk-cli) and automatically sets the `SNYK_CFG_ORG` environment variable based on available organizations from your Snyk account. It intelligently selects the appropriate organization based on your Git repository or specified criteria.
+
+To use this, navigate in VS Code or your IDE of choice to the Snyk plugin settings and find the CLI Path. Modify the snyk cli path to the binary release of this app. Make sure you have the version of snyk cli that you want the IDE to use in your system path.
+
 
 ## Features
 
-- Automatically detects Git repository URL and finds the matching organization
-- Runs Snyk CLI commands without organization setting if no match is found
-- Caches organization data for faster subsequent runs
-- Allows manual selection of organizations
-- Passes through all Snyk CLI commands and arguments
+- **Intelligent Organization Selection**:
+  - Automatically detects Git repository URL and finds the matching organization
+  - Caches organization and target data for faster subsequent runs
+  - Falls back to default organization if configured
+  - Runs without organization setting if no match is found
+- **Flexible Configuration**:
+  - Manual organization selection by name, ID, or slug
+  - Configurable cache duration
+  - Verbose logging for troubleshooting
+- **Performance Optimized**:
+  - SQLite-based caching system
+  - Efficient API pagination handling
+  - Smart cache invalidation
+- **Full Snyk CLI Integration**:
+  - Passes through all Snyk CLI commands and arguments
+  - Preserves Snyk CLI's exit codes and output
 
 ## Installation
 
@@ -27,44 +42,53 @@ go install ./cmd/snyk-auto-org
 ## Usage
 
 ```bash
-# Run a Snyk command with auto organization selection
-# (will auto-detect Git remote URL if in a Git repository)
-# If no organization is found for the Git URL, the command runs as normal
+# Basic usage - automatically detects Git repository and organization
 snyk-auto-org test
 
 # List available organizations
 snyk-auto-org --list-orgs
 
-# Use a specific organization
+# Use a specific organization (by name, ID, or slug)
 snyk-auto-org --org="My Organization" test
+snyk-auto-org --org="org-id-123" test
 
 # Reset the organization cache
-snyk-auto-org --reset-cache test
+snyk-auto-org --reset-cache
 
 # Show verbose output
 snyk-auto-org --verbose test
 
-# Specify a Git URL explicitly to find the right organization
+# Specify a Git URL explicitly
 snyk-auto-org --git-url="https://github.com/username/repo" test
 
 # Disable automatic Git detection
 snyk-auto-org --auto-detect-git=false test
+
+# Set custom cache TTL
+snyk-auto-org --cache-ttl="12h" test
 ```
 
 ## How It Works
 
-1. If `--org` flag is provided, the specified organization is used.
-2. Otherwise, the tool:
-   - Automatically detects the Git remote URL (unless disabled with `--auto-detect-git=false`)
-   - Searches for an organization with a matching target
-   - If found, sets `SNYK_CFG_ORG` to that organization's ID
-   - If not found, runs Snyk without setting an organization
-3. If no Git URL is found but a default organization is set in config, that organization is used.
-4. If no organization can be determined, the command runs without setting one.
+1. **Organization Selection Process**:
+   - If `--org` flag is provided, uses the specified organization (by name, ID, or slug)
+   - Otherwise:
+     1. Checks for Git remote URL (if `--auto-detect-git=true` or `--git-url` provided)
+     2. Searches cached targets for matching repository URL
+     3. If not in cache or cache expired, queries Snyk API for organizations and targets
+     4. If matching target found, uses its organization
+     5. If no match but default organization configured, uses that
+     6. If no organization determined, runs without setting one
+
+2. **Caching System**:
+   - Uses SQLite database at `~/.config/snyk-auto-org/cache.db`
+   - Caches organizations, targets, and their relationships
+   - Default TTL: 24 hours (configurable)
+   - Manual cache reset available via `--reset-cache`
 
 ## Configuration
 
-Configuration is stored in `~/.config/snyk-auto-org/config.json`:
+Configuration file: `~/.config/snyk-auto-org/config.json`
 
 ```json
 {
@@ -74,11 +98,18 @@ Configuration is stored in `~/.config/snyk-auto-org/config.json`:
 }
 ```
 
+### Configuration Options
+
+- `cache_ttl`: Duration to cache organization and target data (default: "24h")
+- `default_org`: Default organization to use when no match found (optional)
+- `verbose`: Enable detailed logging by default (default: false)
+
 ## Requirements
 
 - Go 1.21 or higher
-- Snyk CLI installed and configured
-- Git (for auto-detection of repository URLs)
+- Snyk CLI installed and authenticated
+- Git (for repository URL auto-detection)
+- SQLite (for caching)
 
 ## Development
 
@@ -99,9 +130,44 @@ go build -o snyk-auto-org ./cmd/snyk-auto-org
 ### Running Tests
 
 ```bash
+# Run all tests
 go test ./...
+
+# Run tests with coverage
+go test -cover ./...
 ```
 
-## License
+### Project Structure
 
-[MIT License](LICENSE) 
+```
+/
+├── cmd/snyk-auto-org/    # Main entry point
+├── internal/
+│   ├── api/             # Snyk API client
+│   ├── app/             # Core application logic
+│   ├── cache/           # SQLite caching system
+│   ├── config/          # Configuration handling
+│   └── cmd/             # Command execution
+└── docs/                # Additional documentation
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Organization Not Found**
+   - Use `--list-orgs` to verify available organizations
+   - Check if Git remote URL matches any Snyk targets
+   - Try resetting cache with `--reset-cache`
+
+2. **Authentication Issues**
+   - Ensure Snyk CLI is authenticated (`snyk auth`)
+   - Verify token in `~/.config/configstore/snyk.json`
+   - Check token permissions in Snyk settings
+
+3. **Cache Problems**
+   - Reset cache: `snyk-auto-org --reset-cache`
+   - Verify cache file permissions
+   - Check available disk space
+
+For more detailed design information and technical details, see [DESIGN.md](DESIGN.md).
