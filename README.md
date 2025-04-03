@@ -26,18 +26,18 @@ To use this, navigate in VS Code or your IDE of choice to the Snyk plugin settin
   - Preserves Snyk CLI's exit codes and output
 
 ## Installation
+Prerequisites:
+* Have the Snyk CLI installed and in your global PATH
+* Have authenticated with `snyk auth`
+* Do not have an `CFG_ORG` environment variable set in your environment
+* Do not have an Snyk Organization set in your Snyk IDE
+* Do not have `snyk config org` set (if so, unset it)
 
-```bash
-# Clone the repository
-git clone https://github.com/z4ce/snyk-auto-org.git
-cd snyk-auto-org
-
-# Build the tool
-go build -o snyk-auto-org ./cmd/snyk-auto-org
-
-# Install locally (optional)
-go install ./cmd/snyk-auto-org
-```
+1. Download the release in github
+2. Unzip
+2.1 On MacOS clear quarantine `xattr -d com.apple.quarantine snyk-auto-org`
+3. Move the binary to a directory in your PATH
+4. Set your IDE to use the Snyk CLI binary you just installed or use the snyk-auto-org binary in the command line
 
 ## Usage
 
