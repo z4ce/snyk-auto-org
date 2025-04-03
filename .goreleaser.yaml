@@ -26,6 +26,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+    goarm:
+      - "7"
 
   - id: arm
     env:
