@@ -21,7 +21,7 @@ jobs:
         name: Install SQLite dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev gcc build-essential libc6-dev  gcc-multilib
+          sudo apt-get install -y libsqlite3-dev gcc build-essential libc6-dev gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
       -
         name: Set up Go
         uses: actions/setup-go@v5
@@ -39,4 +39,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CGO_ENABLED: 1
-          CC: gcc
+          CC: arm-linux-gnueabihf-gcc
+          CXX: arm-linux-gnueabihf-g++
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 7
