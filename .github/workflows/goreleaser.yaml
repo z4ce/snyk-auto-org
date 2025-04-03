@@ -19,14 +19,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      -
-        name: Run GoReleaser with Cross-Compilation Support
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
+      - name: Run GoReleaser
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Use goreleaser-cross Docker image for CGO cross-compilation
-          DOCKER_IMAGE: 
+          PACKAGE_NAME: github.com/z4ce/snyk-auto-org
+          GOLANG_CROSS_VERSION: v1.24
+        run: |
+          docker run \
+            --rm \
+            -e CGO_ENABLED=1 \
+            -e GITHUB_TOKEN="${{secrets.GITHUB_TOKEN}}" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v `pwd`:/go/src/${PACKAGE_NAME}\
+            -v `pwd`/sysroot:/sysroot \
+            -w /go/src/${PACKAGE_NAME} \
+            ghcr.io/goreleaser/goreleaser-cross:${GOLANG_CROSS_VERSION} \
+            release --clean
