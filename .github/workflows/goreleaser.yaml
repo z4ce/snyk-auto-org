@@ -21,7 +21,7 @@ jobs:
         name: Install SQLite dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev gcc build-essential
+          sudo apt-get install -y libsqlite3-dev gcc build-essential libc6-dev
       -
         name: Set up Go
         uses: actions/setup-go@v5
