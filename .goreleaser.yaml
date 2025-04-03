@@ -25,10 +25,6 @@ builds:
       - windows
     goarch:
       - amd64
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w
     overrides:
       - goos: darwin
         env:
@@ -48,10 +44,6 @@ builds:
       - windows
     goarch:
       - arm64
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w
     overrides:
       - goos: linux
         env:

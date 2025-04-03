@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: ghcr.io/goreleaser/goreleaser-cross:v1.24.1
     steps:
       -
         name: Checkout
@@ -26,5 +26,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Use goreleaser-cross Docker image for CGO cross-compilation
-          DOCKER_IMAGE: ghcr.io/goreleaser/goreleaser-cross:v1.21.5
