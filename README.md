@@ -48,6 +48,9 @@ snyk-auto-org test
 # List available organizations
 snyk-auto-org --list-orgs
 
+# List all targets in the cache
+snyk-auto-org --list-targets
+
 # Use a specific organization (by name, ID, or slug)
 snyk-auto-org --org="My Organization" test
 snyk-auto-org --org="org-id-123" test

@@ -51,6 +51,7 @@ func init() {
 	rootCmd.Flags().String("cache-ttl", "24h", "Set the time-to-live for cached data")
 	rootCmd.Flags().String("org", "", "Explicitly specify which organization to use by name or ID")
 	rootCmd.Flags().Bool("list-orgs", false, "Display available organizations and exit")
+	rootCmd.Flags().Bool("list-targets", false, "Display all available targets in the database and exit")
 	rootCmd.Flags().Bool("verbose", false, "Show additional information during execution")
 	rootCmd.Flags().String("git-url", "", "Specify a Git URL to automatically find the right organization")
 	rootCmd.Flags().Bool("auto-detect-git", true, "Automatically detect Git remote URL for organization selection")
@@ -132,6 +133,15 @@ func run(cmd *cobra.Command, args []string) error {
 		fmt.Println("Available Snyk organizations:")
 		for _, org := range organizations {
 			fmt.Printf("- %s (%s)\n", org.Name, org.ID)
+		}
+		return nil
+	}
+
+	// Check if the user requested to list targets
+	if listTargets, _ := cmd.Flags().GetBool("list-targets"); listTargets {
+		err := listAllTargets(db, cfg)
+		if err != nil {
+			return fmt.Errorf("failed to list targets: %w", err)
 		}
 		return nil
 	}
@@ -407,4 +417,56 @@ func getTargets(orgID string, db *cache.SQLiteCache, cfg *config.Config, client 
 	}
 
 	return targets, nil
+}
+
+// listAllTargets retrieves and displays all targets from all organizations in the cache
+func listAllTargets(db *cache.SQLiteCache, cfg *config.Config) error {
+	// First get all organizations to map IDs to names
+	organizations, err := getOrganizations(db, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to get organizations: %w", err)
+	}
+
+	// Create a map of org IDs to org names for quick lookup
+	orgMap := make(map[string]string)
+	for _, org := range organizations {
+		orgMap[org.ID] = org.Name
+	}
+
+	// Get all targets from all organizations
+	allTargets := make(map[string][]api.Target)
+	for _, org := range organizations {
+		targets, err := db.GetTargetsByOrgID(org.ID)
+		if err != nil {
+			fmt.Printf("Warning: could not get targets for organization %s: %v\n", org.Name, err)
+			continue
+		}
+		allTargets[org.ID] = targets
+	}
+
+	// Display the targets
+	if len(allTargets) == 0 {
+		fmt.Println("No targets found in the cache")
+		return nil
+	}
+
+	fmt.Println("Available Snyk targets by organization:")
+	for orgID, targets := range allTargets {
+		orgName := orgMap[orgID]
+		if orgName == "" {
+			orgName = orgID
+		}
+
+		fmt.Printf("\n%s (%s):\n", orgName, orgID)
+		if len(targets) == 0 {
+			fmt.Println("  No targets found")
+			continue
+		}
+
+		for _, target := range targets {
+			fmt.Printf("  - %s (%s)\n", target.Attributes.DisplayName, target.Attributes.URL)
+		}
+	}
+
+	return nil
 }
