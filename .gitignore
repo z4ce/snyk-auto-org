@@ -47,4 +47,5 @@ debug
 
 # Test artifacts
 **/testdata/tmp/ 
-snyk-auto-org
+snyk-auto-org# Added by goreleaser init:
+dist/
