@@ -30,15 +30,18 @@ builds:
     ldflags:
       - -s -w
     overrides:
+      - goos: darwin
+        env:
+          - CC=o64-clang
+          - CXX=o64-clang++
       - goos: windows
         env:
           - CC=x86_64-w64-mingw32-gcc
+          - CXX=x86_64-w64-mingw32-g++
 
   - id: arm64
     env:
       - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-      - CXX=aarch64-linux-gnu-g++
     goos:
       - linux
       - darwin
@@ -50,9 +53,18 @@ builds:
     ldflags:
       - -s -w
     overrides:
+      - goos: linux
+        env:
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+      - goos: darwin
+        env:
+          - CC=oa64-clang
+          - CXX=oa64-clang++
       - goos: windows
         env:
-          - CC=aarch64-w64-mingw32-gcc
+          - CC=/llvm-mingw/bin/aarch64-w64-mingw32-gcc
+          - CXX=/llvm-mingw/bin/aarch64-w64-mingw32-g++
 
 archives:
   - formats: [zip]

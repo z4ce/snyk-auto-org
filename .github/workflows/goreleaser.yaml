@@ -18,24 +18,13 @@ jobs:
         with:
           fetch-depth: 0
       -
-        name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev gcc build-essential libc6-dev-arm64-cross g++-aarch64-linux-gnu mingw-w64
-      -
-        name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '>=1.21'
-      -
-        name: Run GoReleaser
+        name: Run GoReleaser with Cross-Compilation Support
         uses: goreleaser/goreleaser-action@v6
         with:
-          # either 'goreleaser' (default) or 'goreleaser-pro'
           distribution: goreleaser
-          # 'latest', 'nightly', or a semver
           version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CGO_ENABLED: 1
+          # Use goreleaser-cross Docker image for CGO cross-compilation
+          DOCKER_IMAGE: ghcr.io/goreleaser/goreleaser-cross:v1.21.5
