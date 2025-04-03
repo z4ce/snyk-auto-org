@@ -29,22 +29,6 @@ builds:
     goarm:
       - "7"
 
-  - id: arm
-    env:
-      - CGO_ENABLED=1
-      - CC=arm-linux-gnueabihf-gcc
-      - CXX=arm-linux-gnueabihf-g++
-    goos:
-      - linux
-    goarch:
-      - arm
-    goarm:
-      - "7"
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w
-
 archives:
   - formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
