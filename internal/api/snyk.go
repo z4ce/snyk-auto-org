@@ -286,7 +286,20 @@ func (c *SnykClient) getAllOrganizationPages(initialURL string) ([]Organization,
 		if orgsResp.Links.Next != "" {
 			// If the next URL is a relative path, make it absolute
 			if !isAbsoluteURL(orgsResp.Links.Next) {
-				nextURL = c.RestBaseURL + orgsResp.Links.Next
+				// Parse the base URL to get its components
+				baseURL, err := url.Parse(c.RestBaseURL)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse base URL: %w", err)
+				}
+
+				// Parse the relative path
+				relPath, err := url.Parse(orgsResp.Links.Next)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse relative path: %w", err)
+				}
+
+				// Resolve the relative path against the base URL
+				nextURL = baseURL.ResolveReference(relPath).String()
 			} else {
 				nextURL = orgsResp.Links.Next
 			}
@@ -411,7 +424,20 @@ func (c *SnykClient) getAllTargetPages(initialURL string) ([]Target, error) {
 		if targetsResp.Links.Next != "" {
 			// If the next URL is a relative path, make it absolute
 			if !isAbsoluteURL(targetsResp.Links.Next) {
-				nextURL = c.RestBaseURL + targetsResp.Links.Next
+				// Parse the base URL to get its components
+				baseURL, err := url.Parse(c.RestBaseURL)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse base URL: %w", err)
+				}
+
+				// Parse the relative path
+				relPath, err := url.Parse(targetsResp.Links.Next)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse relative path: %w", err)
+				}
+
+				// Resolve the relative path against the base URL
+				nextURL = baseURL.ResolveReference(relPath).String()
 			} else {
 				nextURL = targetsResp.Links.Next
 			}

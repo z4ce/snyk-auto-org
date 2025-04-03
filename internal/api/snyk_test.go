@@ -285,6 +285,125 @@ var _ = Describe("SnykClient", func() {
 			})
 		})
 
+		Context("when the API returns paginated results with unicode-encoded ampersands", func() {
+			BeforeEach(func() {
+				// First page with next link containing unicode-encoded ampersand
+				mux.HandleFunc("/orgs", func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
+					Expect(r.URL.Query().Get("version")).To(Equal(api.SnykAPIRestVersion))
+
+					// Check if this is the second page request
+					if r.URL.Query().Get("starting_after") == "org-id-2" {
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(`{
+							"data": [
+								{
+									"id": "org-id-3",
+									"attributes": {
+										"name": "Organization 3",
+										"slug": "org-slug-3"
+									}
+								}
+							]
+						}`))
+						return
+					}
+
+					// First page with unicode-encoded ampersand
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{
+						"data": [
+							{
+								"id": "org-id-1",
+								"attributes": {
+									"name": "Organization 1",
+									"slug": "org-slug-1"
+								}
+							},
+							{
+								"id": "org-id-2",
+								"attributes": {
+									"name": "Organization 2",
+									"slug": "org-slug-2"
+								}
+							}
+						],
+						"links": {
+							"next": "/orgs?version=2024-10-15\u0026starting_after=org-id-2"
+						}
+					}`))
+				})
+			})
+
+			It("should handle unicode-encoded ampersands in pagination links", func() {
+				orgs, err := client.GetOrganizations()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(orgs).To(HaveLen(3))
+				Expect(orgs[0].ID).To(Equal("org-id-1"))
+				Expect(orgs[1].ID).To(Equal("org-id-2"))
+				Expect(orgs[2].ID).To(Equal("org-id-3"))
+			})
+		})
+
+		Context("when pagination links contain absolute URLs with base path", func() {
+			BeforeEach(func() {
+				mux.HandleFunc("/orgs", func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
+					Expect(r.URL.Query().Get("version")).To(Equal(api.SnykAPIRestVersion))
+
+					// Check if this is the second page request
+					if r.URL.Query().Get("starting_after") == "org-id-2" {
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(`{
+							"data": [
+								{
+									"id": "org-id-3",
+									"attributes": {
+										"name": "Organization 3",
+										"slug": "org-slug-3"
+									}
+								}
+							]
+						}`))
+						return
+					}
+
+					// First page with absolute URL in next link that includes the base path
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{
+						"data": [
+							{
+								"id": "org-id-1",
+								"attributes": {
+									"name": "Organization 1",
+									"slug": "org-slug-1"
+								}
+							},
+							{
+								"id": "org-id-2",
+								"attributes": {
+									"name": "Organization 2",
+									"slug": "org-slug-2"
+								}
+							}
+						],
+						"links": {
+							"next": "` + server.URL + `/orgs?version=2024-10-15&starting_after=org-id-2"
+						}
+					}`))
+				})
+			})
+
+			It("should handle absolute URLs with base path in pagination links", func() {
+				orgs, err := client.GetOrganizations()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(orgs).To(HaveLen(3))
+				Expect(orgs[0].ID).To(Equal("org-id-1"))
+				Expect(orgs[1].ID).To(Equal("org-id-2"))
+				Expect(orgs[2].ID).To(Equal("org-id-3"))
+			})
+		})
+
 		Context("when the API returns an error", func() {
 			BeforeEach(func() {
 				mux.HandleFunc("/orgs", func(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +505,73 @@ var _ = Describe("SnykClient", func() {
 				Expect(targets[0].ID).To(Equal(targetID))
 				Expect(targets[0].Attributes.DisplayName).To(Equal("test/repo"))
 				Expect(targets[0].Attributes.URL).To(Equal(gitURL))
+			})
+		})
+
+		Context("when pagination links contain absolute URLs with base path", func() {
+			BeforeEach(func() {
+				mux.HandleFunc("/orgs/"+orgID+"/targets", func(w http.ResponseWriter, r *http.Request) {
+					Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + token))
+					Expect(r.URL.Query().Get("version")).To(Equal(api.SnykAPIRestVersion))
+
+					// Check if this is the second page request
+					if r.URL.Query().Get("starting_after") == "target-id-1" {
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(`{
+							"data": [
+								{
+									"id": "target-id-2",
+									"attributes": {
+										"displayName": "test/repo2",
+										"url": "https://github.com/test/repo2"
+									}
+								}
+							]
+						}`))
+						return
+					}
+
+					// First page with absolute URL in next link
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{
+						"data": [
+							{
+								"id": "target-id-1",
+								"attributes": {
+									"displayName": "test/repo",
+									"url": "` + gitURL + `"
+								}
+							}
+						],
+						"links": {
+							"next": "` + server.URL + `/orgs/` + orgID + `/targets?version=` + api.SnykAPIRestVersion + `&starting_after=target-id-1"
+						}
+					}`))
+				})
+			})
+
+			It("should handle absolute URLs with base path in pagination links", func() {
+				targets, err := client.GetTargetsWithURL(orgID, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(targets).To(HaveLen(2))
+				Expect(targets[0].ID).To(Equal("target-id-1"))
+				Expect(targets[0].Attributes.DisplayName).To(Equal("test/repo"))
+				Expect(targets[1].ID).To(Equal("target-id-2"))
+				Expect(targets[1].Attributes.DisplayName).To(Equal("test/repo2"))
+			})
+		})
+
+		Context("when the API returns an error", func() {
+			BeforeEach(func() {
+				mux.HandleFunc("/orgs/"+orgID+"/targets", func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusUnauthorized)
+				})
+			})
+
+			It("returns an error", func() {
+				_, err := client.GetTargetsWithURL(orgID, "")
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("unexpected status code: 401"))
 			})
 		})
 	})
